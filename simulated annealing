@@ -3,51 +3,123 @@ import random
 import time
 import numpy as np
 
-# Dán trực tiếp nội dung dữ liệu tọa độ của a280, att532 hoặc d1291 vào đây
 TSP_DATA = """
-
-# Dán trực tiếp nội dung dữ liệu tọa độ của a280, att532 hoặc d1291 vào đây
-
+# Dán toàn bộ nội dung bất kỳ vào giữa cặp dấu """ và """
 """
 
 
-def parse_tsp_data(raw_text, default_edge_type="EUC_2D"):
-    edge_type = default_edge_type
+def build_universal_distance_matrix(raw_text):
+    name = "Unknown"
+    dimension = None
+    edge_type = "EUC_2D"
+    edge_format = "FULL_MATRIX"
+    section = None
     coords = []
+    explicit_weights = []
+
     for line in raw_text.strip().splitlines():
         line = line.strip()
-        if not line or line == "EOF":
+        if not line:
             continue
-        if line.startswith("EDGE_WEIGHT_TYPE"):
-            edge_type = line.split(":")[1].strip()
+        if line == "EOF":
+            break
+
+        if ":" in line and section is None:
+            key, val = [x.strip() for x in line.split(":", 1)]
+            if key == "NAME":
+                name = val
+            elif key == "DIMENSION":
+                dimension = int(val)
+            elif key == "EDGE_WEIGHT_TYPE":
+                edge_type = val
+            elif key == "EDGE_WEIGHT_FORMAT":
+                edge_format = val
             continue
-        parts = line.split()
-        try:
+
+        if line in ("NODE_COORD_SECTION", "EDGE_WEIGHT_SECTION", "DISPLAY_DATA_SECTION"):
+            section = line
+            continue
+
+        if section == "NODE_COORD_SECTION":
+            parts = line.split()
             if len(parts) >= 3:
                 coords.append((float(parts[1]), float(parts[2])))
-            elif len(parts) == 2:
-                coords.append((float(parts[0]), float(parts[1])))
-        except ValueError:
-            continue
-    return np.array(coords, dtype=np.float64), edge_type
+        elif section == "EDGE_WEIGHT_SECTION":
+            explicit_weights.extend(float(x) for x in line.split())
+        elif section is None:
+            parts = line.split()
+            try:
+                if len(parts) >= 3:
+                    coords.append((float(parts[1]), float(parts[2])))
+                elif len(parts) == 2:
+                    coords.append((float(parts[0]), float(parts[1])))
+            except ValueError:
+                pass
 
+    if edge_type == "EXPLICIT":
+        n = dimension
+        dist = np.zeros((n, n), dtype=np.int32)
+        idx = 0
 
-def build_distance_matrix(coords, edge_type="EUC_2D"):
-    dx = coords[:, 0:1] - coords[:, 0:1].T
-    dy = coords[:, 1:2] - coords[:, 1:2].T
+        if edge_format == "FULL_MATRIX":
+            dist = np.array(explicit_weights[: n * n], dtype=np.int32).reshape((n, n))
+        elif edge_format in ("UPPER_ROW", "LOWER_COL"):
+            for i in range(n):
+                for j in range(i + 1, n):
+                    dist[i, j] = dist[j, i] = int(round(explicit_weights[idx]))
+                    idx += 1
+        elif edge_format in ("LOWER_ROW", "UPPER_COL"):
+            for i in range(n):
+                for j in range(i):
+                    dist[i, j] = dist[j, i] = int(round(explicit_weights[idx]))
+                    idx += 1
+        elif edge_format in ("UPPER_DIAG_ROW", "LOWER_DIAG_COL"):
+            for i in range(n):
+                for j in range(i, n):
+                    dist[i, j] = dist[j, i] = int(round(explicit_weights[idx]))
+                    idx += 1
+        elif edge_format in ("LOWER_DIAG_ROW", "UPPER_DIAG_COL"):
+            for i in range(n):
+                for j in range(i + 1):
+                    dist[i, j] = dist[j, i] = int(round(explicit_weights[idx]))
+                    idx += 1
+
+        np.fill_diagonal(dist, 0)
+        return name, edge_type, dist
+
+    coords_arr = np.array(coords, dtype=np.float64)
+    dx = coords_arr[:, 0:1] - coords_arr[:, 0:1].T
+    dy = coords_arr[:, 1:2] - coords_arr[:, 1:2].T
     sq_dist = dx * dx + dy * dy
 
     if edge_type == "ATT":
-        # Chuẩn Pseudo-Euclidean cho att532
         r = np.sqrt(sq_dist / 10.0)
         t = np.floor(r + 0.5).astype(np.int32)
         dist = np.where(t < r, t + 1, t).astype(np.int32)
+    elif edge_type == "CEIL_2D":
+        dist = np.ceil(np.sqrt(sq_dist)).astype(np.int32)
+    elif edge_type == "MAN_2D":
+        dist = np.floor(np.abs(dx) + np.abs(dy) + 0.5).astype(np.int32)
+    elif edge_type == "MAX_2D":
+        dist = np.maximum(np.floor(np.abs(dx) + 0.5), np.floor(np.abs(dy) + 0.5)).astype(np.int32)
+    elif edge_type == "GEO":
+        pi = 3.141592
+        rrr = 6378.388
+        deg = np.trunc(coords_arr)
+        minutes = coords_arr - deg
+        rad = pi * (deg + 5.0 * minutes / 3.0) / 180.0
+        lat = rad[:, 0:1]
+        lon = rad[:, 1:2]
+        q1 = np.cos(lon - lon.T)
+        q2 = np.cos(lat - lat.T)
+        q3 = np.cos(lat + lat.T)
+        arg = np.clip(0.5 * ((1.0 + q1) * q2 - (1.0 - q1) * q3), -1.0, 1.0)
+        dist = (rrr * np.arccos(arg) + 1.0).astype(np.int32)
     else:
-        # Chuẩn Euclidean làm tròn cho a280, d1291
         dist = np.floor(np.sqrt(sq_dist) + 0.5).astype(np.int32)
 
     np.fill_diagonal(dist, 0)
-    return dist
+    return name, edge_type, dist
 
 
 def simulated_annealing_tsp(dist_matrix, alpha=0.995, t_min=1e-3, seed=42):
@@ -56,7 +128,6 @@ def simulated_annealing_tsp(dist_matrix, alpha=0.995, t_min=1e-3, seed=42):
     n = dist_matrix.shape[0]
     dist_list = dist_matrix.tolist()
 
-    # Khởi tạo chu trình ngẫu nhiên
     tour = list(range(n))
     random.shuffle(tour)
 
@@ -74,7 +145,6 @@ def simulated_annealing_tsp(dist_matrix, alpha=0.995, t_min=1e-3, seed=42):
             if i == 0 and j == n - 1:
                 continue
 
-            # Tính độ chênh lệch chi phí 2-opt trong O(1)
             a = tour[i - 1]
             b = tour[i]
             c = tour[j]
@@ -96,11 +166,10 @@ def simulated_annealing_tsp(dist_matrix, alpha=0.995, t_min=1e-3, seed=42):
 
 
 if __name__ == "__main__":
-    coords, edge_type = parse_tsp_data(TSP_DATA)
-    dist_matrix = build_distance_matrix(coords, edge_type)
+    name, edge_type, dist_matrix = build_universal_distance_matrix(TSP_DATA)
     best_tour, best_cost, run_time = simulated_annealing_tsp(dist_matrix)
 
-    print(f"Số đỉnh: {len(coords)} | Chuẩn khoảng cách: {edge_type}")
+    print(f"Dataset: {name} | Số đỉnh: {dist_matrix.shape[0]} | Chuẩn: {edge_type}")
     print(f"Chi phí tốt nhất (Simulated Annealing): {best_cost}")
     print(f"Thời gian chạy: {run_time:.4f}s")
     print(f"Lộ trình (1-indexed): {[x + 1 for x in best_tour]}")
