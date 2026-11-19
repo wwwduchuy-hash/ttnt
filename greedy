@@ -1,13 +1,25 @@
+import math
 import time
 import numpy as np
+import matplotlib.pyplot as plt
 
-
+# Dán toàn bộ nội dung file .tsp (a280, att532, d1291, berlin52,...) vào giữa cặp dấu """ và """
 TSP_DATA = """
-# Dán toàn bộ nội dung bất kỳ vào giữa cặp dấu """ và """
+NAME : a280
+TYPE : TSP
+DIMENSION: 5
+EDGE_WEIGHT_TYPE : EUC_2D
+NODE_COORD_SECTION
+1 288 149
+2 288 129
+3 270 133
+4 256 141
+5 256 157
+EOF
 """
 
 
-def build_universal_distance_matrix(raw_text):
+def build_universal_data(raw_text):
     name = "Unknown"
     dimension = None
     edge_type = "EUC_2D"
@@ -39,14 +51,13 @@ def build_universal_distance_matrix(raw_text):
             section = line
             continue
 
-        if section == "NODE_COORD_SECTION":
+        if section in ("NODE_COORD_SECTION", "DISPLAY_DATA_SECTION"):
             parts = line.split()
             if len(parts) >= 3:
                 coords.append((float(parts[1]), float(parts[2])))
         elif section == "EDGE_WEIGHT_SECTION":
             explicit_weights.extend(float(x) for x in line.split())
         elif section is None:
-            # Hỗ trợ trường hợp dán thẳng tọa độ thô không có dòng tiêu đề
             parts = line.split()
             try:
                 if len(parts) >= 3:
@@ -56,7 +67,6 @@ def build_universal_distance_matrix(raw_text):
             except ValueError:
                 pass
 
-    # Trường hợp 1: Dữ liệu cho sẵn ma trận khoảng cách (EXPLICIT)
     if edge_type == "EXPLICIT":
         n = dimension
         dist = np.zeros((n, n), dtype=np.int32)
@@ -86,9 +96,15 @@ def build_universal_distance_matrix(raw_text):
                     idx += 1
 
         np.fill_diagonal(dist, 0)
-        return name, edge_type, dist
+        if len(coords) == n:
+            coords_arr = np.array(coords, dtype=np.float64)
+        else:
+            coords_arr = np.array(
+                [(math.cos(2 * math.pi * i / n) * 100, math.sin(2 * math.pi * i / n) * 100) for i in range(n)],
+                dtype=np.float64,
+            )
+        return name, edge_type, coords_arr, dist
 
-    # Trường hợp 2: Dữ liệu cho tọa độ các đỉnh
     coords_arr = np.array(coords, dtype=np.float64)
     dx = coords_arr[:, 0:1] - coords_arr[:, 0:1].T
     dy = coords_arr[:, 1:2] - coords_arr[:, 1:2].T
@@ -118,11 +134,10 @@ def build_universal_distance_matrix(raw_text):
         arg = np.clip(0.5 * ((1.0 + q1) * q2 - (1.0 - q1) * q3), -1.0, 1.0)
         dist = (rrr * np.arccos(arg) + 1.0).astype(np.int32)
     else:
-        # Mặc định EUC_2D
         dist = np.floor(np.sqrt(sq_dist) + 0.5).astype(np.int32)
 
     np.fill_diagonal(dist, 0)
-    return name, edge_type, dist
+    return name, edge_type, coords_arr, dist
 
 
 def greedy_tsp(dist_matrix):
@@ -132,6 +147,7 @@ def greedy_tsp(dist_matrix):
 
     best_tour = None
     best_cost = float("inf")
+    all_costs = []
 
     for start_node in range(n):
         visited = np.zeros(n, dtype=bool)
@@ -149,19 +165,53 @@ def greedy_tsp(dist_matrix):
             curr = nxt
 
         cost += int(dist_matrix[curr, start_node])
+        all_costs.append(cost)
         if cost < best_cost:
             best_cost = cost
             best_tour = tour
 
     elapsed = time.perf_counter() - start_time
-    return best_tour, int(best_cost), elapsed
+    return best_tour, int(best_cost), all_costs, elapsed
+
+
+def draw_cost_chart(all_costs, best_cost, dataset_name):
+    """Biểu đồ 1: Chi phí chu trình ứng với từng đỉnh xuất phát (1..N)."""
+    x_list = np.arange(1, len(all_costs) + 1)
+    plt.figure(figsize=(8, 4.5))
+    plt.plot(x_list, all_costs, lw=1.2, label="Cost by Start Node")
+    plt.axhline(best_cost, color="red", linestyle="--", lw=1.5, label=f"Best Cost ({best_cost})")
+    plt.title(f"Greedy Route Cost by Starting Node ({dataset_name})")
+    plt.xlabel("Start Node ID")
+    plt.ylabel("Cost")
+    plt.legend()
+    plt.grid(True, linestyle="--", alpha=0.5)
+    plt.show()
+
+
+def draw_path(coords, tour, best_cost, dataset_name):
+    """Biểu đồ 2: Vẽ lộ trình tốt nhất tìm được trên mặt phẳng tọa độ."""
+    closed_tour = list(tour) + [tour[0]]
+    x_list = coords[closed_tour, 0]
+    y_list = coords[closed_tour, 1]
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    plt.scatter(x_list, y_list, s=18)
+    ax.plot(x_list, y_list, "--", lw=1.2, color="black")
+    plt.title(f"Best Greedy Tour - {dataset_name} (Cost: {best_cost})")
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.show()
 
 
 if __name__ == "__main__":
-    name, edge_type, dist_matrix = build_universal_distance_matrix(TSP_DATA)
-    best_tour, best_cost, run_time = greedy_tsp(dist_matrix)
+    name, edge_type, coords, dist_matrix = build_universal_data(TSP_DATA)
+    best_tour, best_cost, all_costs, run_time = greedy_tsp(dist_matrix)
 
     print(f"Dataset: {name} | Số đỉnh: {dist_matrix.shape[0]} | Chuẩn: {edge_type}")
     print(f"Chi phí tốt nhất (Greedy): {best_cost}")
     print(f"Thời gian chạy: {run_time:.4f}s")
     print(f"Lộ trình (1-indexed): {[x + 1 for x in best_tour]}")
+
+    draw_cost_chart(all_costs, best_cost, name)
+    draw_path(coords, best_tour, best_cost, name)
