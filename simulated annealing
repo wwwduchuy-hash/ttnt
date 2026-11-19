@@ -1,0 +1,106 @@
+import math
+import random
+import time
+import numpy as np
+
+# Dán trực tiếp nội dung dữ liệu tọa độ của a280, att532 hoặc d1291 vào đây
+TSP_DATA = """
+
+# Dán trực tiếp nội dung dữ liệu tọa độ của a280, att532 hoặc d1291 vào đây
+
+"""
+
+
+def parse_tsp_data(raw_text, default_edge_type="EUC_2D"):
+    edge_type = default_edge_type
+    coords = []
+    for line in raw_text.strip().splitlines():
+        line = line.strip()
+        if not line or line == "EOF":
+            continue
+        if line.startswith("EDGE_WEIGHT_TYPE"):
+            edge_type = line.split(":")[1].strip()
+            continue
+        parts = line.split()
+        try:
+            if len(parts) >= 3:
+                coords.append((float(parts[1]), float(parts[2])))
+            elif len(parts) == 2:
+                coords.append((float(parts[0]), float(parts[1])))
+        except ValueError:
+            continue
+    return np.array(coords, dtype=np.float64), edge_type
+
+
+def build_distance_matrix(coords, edge_type="EUC_2D"):
+    dx = coords[:, 0:1] - coords[:, 0:1].T
+    dy = coords[:, 1:2] - coords[:, 1:2].T
+    sq_dist = dx * dx + dy * dy
+
+    if edge_type == "ATT":
+        # Chuẩn Pseudo-Euclidean cho att532
+        r = np.sqrt(sq_dist / 10.0)
+        t = np.floor(r + 0.5).astype(np.int32)
+        dist = np.where(t < r, t + 1, t).astype(np.int32)
+    else:
+        # Chuẩn Euclidean làm tròn cho a280, d1291
+        dist = np.floor(np.sqrt(sq_dist) + 0.5).astype(np.int32)
+
+    np.fill_diagonal(dist, 0)
+    return dist
+
+
+def simulated_annealing_tsp(dist_matrix, alpha=0.995, t_min=1e-3, seed=42):
+    start_time = time.perf_counter()
+    random.seed(seed)
+    n = dist_matrix.shape[0]
+    dist_list = dist_matrix.tolist()
+
+    # Khởi tạo chu trình ngẫu nhiên
+    tour = list(range(n))
+    random.shuffle(tour)
+
+    current_cost = sum(dist_list[tour[i]][tour[(i + 1) % n]] for i in range(n))
+    best_tour = tour[:]
+    best_cost = current_cost
+
+    t = max(10.0, float(np.mean(dist_matrix)))
+    iters_per_temp = max(500, 4 * n)
+
+    while t > t_min:
+        for _ in range(iters_per_temp):
+            i = random.randint(0, n - 2)
+            j = random.randint(i + 1, n - 1)
+            if i == 0 and j == n - 1:
+                continue
+
+            # Tính độ chênh lệch chi phí 2-opt trong O(1)
+            a = tour[i - 1]
+            b = tour[i]
+            c = tour[j]
+            d = tour[0] if j == n - 1 else tour[j + 1]
+
+            delta = (dist_list[a][c] + dist_list[b][d]) - (dist_list[a][b] + dist_list[c][d])
+
+            if delta <= 0 or random.random() < math.exp(-delta / t):
+                tour[i : j + 1] = tour[i : j + 1][::-1]
+                current_cost += delta
+                if current_cost < best_cost:
+                    best_cost = current_cost
+                    best_tour = tour[:]
+
+        t *= alpha
+
+    elapsed = time.perf_counter() - start_time
+    return best_tour, int(best_cost), elapsed
+
+
+if __name__ == "__main__":
+    coords, edge_type = parse_tsp_data(TSP_DATA)
+    dist_matrix = build_distance_matrix(coords, edge_type)
+    best_tour, best_cost, run_time = simulated_annealing_tsp(dist_matrix)
+
+    print(f"Số đỉnh: {len(coords)} | Chuẩn khoảng cách: {edge_type}")
+    print(f"Chi phí tốt nhất (Simulated Annealing): {best_cost}")
+    print(f"Thời gian chạy: {run_time:.4f}s")
+    print(f"Lộ trình (1-indexed): {[x + 1 for x in best_tour]}")
