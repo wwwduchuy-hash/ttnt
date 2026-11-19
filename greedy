@@ -1,0 +1,91 @@
+import time
+import numpy as np
+
+
+TSP_DATA = """
+# Dán trực tiếp nội dung dữ liệu tọa độ vào đây
+
+"""
+
+
+def parse_tsp_data(raw_text, default_edge_type="EUC_2D"):
+    edge_type = default_edge_type
+    coords = []
+    for line in raw_text.strip().splitlines():
+        line = line.strip()
+        if not line or line == "EOF":
+            continue
+        if line.startswith("EDGE_WEIGHT_TYPE"):
+            edge_type = line.split(":")[1].strip()
+            continue
+        parts = line.split()
+        try:
+            if len(parts) >= 3:
+                coords.append((float(parts[1]), float(parts[2])))
+            elif len(parts) == 2:
+                coords.append((float(parts[0]), float(parts[1])))
+        except ValueError:
+            continue
+    return np.array(coords, dtype=np.float64), edge_type
+
+
+def build_distance_matrix(coords, edge_type="EUC_2D"):
+    dx = coords[:, 0:1] - coords[:, 0:1].T
+    dy = coords[:, 1:2] - coords[:, 1:2].T
+    sq_dist = dx * dx + dy * dy
+
+    if edge_type == "ATT":
+        # Chuẩn Pseudo-Euclidean cho att532
+        r = np.sqrt(sq_dist / 10.0)
+        t = np.floor(r + 0.5).astype(np.int32)
+        dist = np.where(t < r, t + 1, t).astype(np.int32)
+    else:
+        # Chuẩn Euclidean làm tròn cho a280, d1291
+        dist = np.floor(np.sqrt(sq_dist) + 0.5).astype(np.int32)
+
+    np.fill_diagonal(dist, 0)
+    return dist
+
+
+def greedy_tsp(dist_matrix):
+    start_time = time.perf_counter()
+    n = dist_matrix.shape[0]
+    inf_val = np.iinfo(np.int32).max
+
+    best_tour = None
+    best_cost = float("inf")
+
+    # Thử xuất phát từ tất cả N đỉnh để lấy lộ trình Greedy tốt nhất
+    for start_node in range(n):
+        visited = np.zeros(n, dtype=bool)
+        visited[start_node] = True
+        tour = [start_node]
+        curr = start_node
+        cost = 0
+
+        for _ in range(n - 1):
+            row = np.where(visited, inf_val, dist_matrix[curr])
+            nxt = int(np.argmin(row))
+            cost += int(dist_matrix[curr, nxt])
+            visited[nxt] = True
+            tour.append(nxt)
+            curr = nxt
+
+        cost += int(dist_matrix[curr, start_node])
+        if cost < best_cost:
+            best_cost = cost
+            best_tour = tour
+
+    elapsed = time.perf_counter() - start_time
+    return best_tour, int(best_cost), elapsed
+
+
+if __name__ == "__main__":
+    coords, edge_type = parse_tsp_data(TSP_DATA)
+    dist_matrix = build_distance_matrix(coords, edge_type)
+    best_tour, best_cost, run_time = greedy_tsp(dist_matrix)
+
+    print(f"Số đỉnh: {len(coords)} | Chuẩn khoảng cách: {edge_type}")
+    print(f"Chi phí tốt nhất (Greedy): {best_cost}")
+    print(f"Thời gian chạy: {run_time:.4f}s")
+    print(f"Lộ trình (1-indexed): {[x + 1 for x in best_tour]}")
